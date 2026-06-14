@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>小诺的错题本</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">拍一下，慢慢变会</p>
+        <h1>小诺的错题本</h1>
+      </div>
+      <button id="resetDemo" class="ghost-button" type="button">重新开始</button>
+    </header>
+
+    <main class="app-shell">
+      <section class="panel upload-panel">
+        <div class="section-title">
+          <div>
+            <h2>今天拍作业</h2>
+            <p>家长只要拍清楚。小诺来整理做错、空着和可以复习的题。</p>
+          </div>
+          <span id="todayLabel" class="pill"></span>
+        </div>
+
+        <label class="subject-field">
+          今天练哪科
+          <select id="subjectInput">
+            <option value="数学">数学</option>
+            <option value="语文">语文</option>
+            <option value="英语">英语</option>
+            <option value="科学">科学</option>
+            <option value="其他">其他</option>
+          </select>
+        </label>
+
+        <label class="dropzone" for="paperUpload">
+          <input id="paperUpload" type="file" accept="image/*,application/pdf,.pdf,.heic,.heif" multiple />
+          <span class="drop-icon">+</span>
+          <strong>拍照 / 选图片</strong>
+          <small>每天拍一下就好，后面交给小诺。</small>
+        </label>
+
+        <div id="uploadStatus" class="upload-status" role="status" aria-live="polite"></div>
+        <div id="uploadPreview" class="preview-grid" aria-live="polite"></div>
+
+        <div class="review-actions">
+          <button id="startReview" class="primary-button" type="button" disabled>开始批改</button>
+          <span id="reviewStatus" class="review-status" role="status" aria-live="polite"></span>
+        </div>
+
+        <details class="ai-settings">
+          <summary>先连接自己的 AI</summary>
+          <div class="ai-settings-body">
+            <p class="settings-note">批改要用家长自己的 AI。小诺只负责整理错题、空白题、统计和复习，不使用你的后台 API。</p>
+            <input id="reviewModeInput" type="hidden" value="custom" />
+            <div id="customAiFields" class="custom-ai-fields">
+              <label>
+                选择 AI
+                <select id="aiProviderInput">
+                  <option value="gemini">Gemini</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="claude">Claude</option>
+                  <option value="gpt">GPT</option>
+                </select>
+              </label>
+              <label>
+                API Key
+                <input id="apiKeyInput" type="password" autocomplete="off" placeholder="填自己的 API Key" />
+              </label>
+              <p class="settings-note">原型只保存在这台设备。真正上线时，Key 要加密保存，不能直接暴露在网页里。</p>
+            </div>
+            <div class="settings-actions">
+              <button id="saveAiSettings" class="soft-button" type="button">保存设置</button>
+              <button id="testAiSettings" class="soft-button" type="button">测试连接</button>
+            </div>
+            <div id="aiSettingsStatus" class="settings-status" role="status" aria-live="polite"></div>
+          </div>
+        </details>
+      </section>
+
+      <section id="correctionPanel" class="panel review-panel" hidden>
+        <div class="section-title">
+          <div>
+            <h2>修改这道题</h2>
+            <p>只有小诺看错了，才需要改这里。</p>
+          </div>
+        </div>
+
+        <form id="problemForm" class="problem-form">
+          <label>
+            题目
+            <textarea id="questionInput" rows="3" placeholder="例如：900÷(348-323)"></textarea>
+          </label>
+          <div class="form-grid">
+            <label>
+              学科
+              <select id="problemSubjectInput">
+                <option value="数学">数学</option>
+                <option value="语文">语文</option>
+                <option value="英语">英语</option>
+                <option value="科学">科学</option>
+                <option value="其他">其他</option>
+              </select>
+            </label>
+            <label>
+              我的答案
+              <input id="childAnswerInput" type="text" placeholder="例如：40" />
+            </label>
+            <label>
+              参考答案
+              <input id="correctAnswerInput" type="text" placeholder="例如：36" />
+            </label>
+            <label>
+              这题怎么样
+              <select id="resultInput">
+                <option value="wrong">做错了</option>
+                <option value="blank">空着没写</option>
+                <option value="correct">做对了</option>
+              </select>
+            </label>
+            <label>
+              小知识点
+              <input id="topicInput" type="text" placeholder="例如：有括号的混合运算" />
+            </label>
+          </div>
+          <label>
+            怎么想
+            <textarea id="explanationInput" rows="4" placeholder="写下哪里卡住了，或者正确方法是什么。"></textarea>
+          </label>
+          <div class="form-actions">
+            <button id="saveProblemButton" class="primary-button" type="submit">保存修改</button>
+            <button id="cancelEdit" class="soft-button" type="button">不改了</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="workspace">
+        <aside class="panel stats-panel">
+          <h2>小诺看到的变化</h2>
+          <div class="stat-grid">
+            <div>
+              <strong id="totalCount">0</strong>
+              <span>拍了几份</span>
+            </div>
+            <div>
+              <strong id="wrongCount">0</strong>
+              <span>要再看</span>
+            </div>
+            <div>
+              <strong id="understoodCount">0</strong>
+              <span>正确率</span>
+            </div>
+            <div>
+              <strong id="correctRate">0%</strong>
+              <span>收好了</span>
+            </div>
+          </div>
+          <div id="encouragement" class="encouragement"></div>
+          <section class="stage-panel" aria-labelledby="stageTitle">
+            <h3 id="stageTitle">最近一小段</h3>
+            <p>按学科看近 7 天：哪里顺了，哪里还需要再练。</p>
+            <div id="stageStats" class="stage-list"></div>
+          </section>
+        </aside>
+
+        <section class="panel notebook-panel">
+          <div class="section-title">
+            <div>
+              <h2>需要再看的题</h2>
+              <p>做错和空着分开放。考前或阶段复习时，从这里拿出来练。</p>
+            </div>
+            <div class="filter-tabs" role="tablist" aria-label="题目筛选">
+              <button class="tab active" type="button" data-filter="all">全部</button>
+              <button class="tab" type="button" data-filter="wrong">做错了</button>
+              <button class="tab" type="button" data-filter="blank">空着</button>
+              <button class="tab" type="button" data-filter="wrongArchive">错题盒</button>
+              <button class="tab" type="button" data-filter="blankArchive">空白盒</button>
+            </div>
+          </div>
+
+          <div id="problemList" class="problem-list" aria-live="polite"></div>
+        </section>
+      </section>
+    </main>
+
+    <template id="problemTemplate">
+      <article class="problem-card">
+        <div class="problem-head">
+          <div>
+            <span class="status-badge"></span>
+            <h3></h3>
+          </div>
+          <div class="card-actions">
+            <button class="small-button edit-button" type="button">修改</button>
+            <button class="icon-button delete-button" type="button" aria-label="删除">×</button>
+          </div>
+        </div>
+        <dl class="answer-grid">
+          <div>
+            <dt>学科</dt>
+            <dd class="subject"></dd>
+          </div>
+          <div>
+            <dt>我的答案</dt>
+            <dd class="child-answer"></dd>
+          </div>
+          <div>
+            <dt>参考答案</dt>
+            <dd class="correct-answer"></dd>
+          </div>
+          <div>
+            <dt>小知识点</dt>
+            <dd class="topic"></dd>
+          </div>
+        </dl>
+        <div class="explanation"></div>
+        <div class="redo-panel">
+          <h4>相似题重做</h4>
+          <p class="redo-note"></p>
+          <button class="primary-button similar-button" type="button">出一道相似题</button>
+          <div class="similar-box" hidden>
+            <strong>相似题</strong>
+            <p class="similar-question"></p>
+            <div class="redo-actions">
+              <button class="small-button redo-pass-button" type="button">做对了</button>
+              <button class="small-button redo-fail-button" type="button">还要练</button>
+            </div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <button class="archive-button" type="button">放进错题盒</button>
+        </div>
+      </article>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
