@@ -181,7 +181,7 @@ async function addUploadFiles(fileList) {
   }
 }
 
-function startReview() {
+async function startReview() {
   if (state.uploads.length === 0) {
     setReviewStatus("先拍一份作业，再开始批改。", "error");
     return;
@@ -199,11 +199,38 @@ function startReview() {
     return;
   }
   if (settings.connectionStatus !== "connected") {
-    setReviewStatus("先点“测试连接”完成本地检查。真实 API 测试需要接后端。", "error");
+    setReviewStatus("先点“测试连接”，确认 API 能用，再开始批改。", "error");
     return;
   }
 
-  setReviewStatus(buildReviewIntegrationMessage(settings), "info");
+  elements.startReview.disabled = true;
+  setReviewStatus("小诺正在把照片交给 AI 批改...", "working");
+
+  try {
+    const reviewUploads = await Promise.all(unreviewedUploads.map(buildReviewUploadPayload));
+    const data = await postJson("/api/review", {
+      provider: settings.provider,
+      apiKey: settings.apiKey,
+      subject: elements.subjectInput.value,
+      uploads: reviewUploads
+    });
+    const reviewedAt = new Date().toISOString();
+    const newProblems = (data.questions || []).map((question) => normalizeReviewQuestion(question, reviewedAt));
+    state.problems.push(...newProblems);
+    state.uploads = state.uploads.map((upload) =>
+      unreviewedUploads.some((item) => item.id === upload.id) ? { ...upload, reviewedAt } : upload
+    );
+    setActiveFilter("all");
+    saveState();
+    render();
+    const wrongCount = newProblems.filter((problem) => problem.result === "wrong").length;
+    const blankCount = newProblems.filter((problem) => problem.result === "blank").length;
+    setReviewStatus(`批改好了：错题 ${wrongCount} 道，空白 ${blankCount} 道。`, "success");
+  } catch (error) {
+    console.error(error);
+    setReviewStatus(error.message || "批改失败了。检查 API Key 或换一张更清楚的照片。", "error");
+    renderReviewAction();
+  }
 }
 
 async function resetAll() {
@@ -303,9 +330,7 @@ async function testAiSettings() {
   state.aiSettings = settings;
   saveState();
   renderReviewAction();
-  renderAiSettingsStatus("正在检查设置...");
-
-  await waitForConnectionTest();
+  renderAiSettingsStatus("正在测试连接...");
 
   if (!settings.apiKey) {
     state.aiSettings = {
@@ -319,14 +344,29 @@ async function testAiSettings() {
     return;
   }
 
-  state.aiSettings = {
-    ...settings,
-    connectionStatus: "connected",
-    testedAt: new Date().toISOString()
-  };
-  saveState();
-  renderReviewAction();
-  renderAiSettingsStatus();
+  try {
+    await postJson("/api/test-ai", {
+      provider: settings.provider,
+      apiKey: settings.apiKey
+    });
+    state.aiSettings = {
+      ...settings,
+      connectionStatus: "connected",
+      testedAt: new Date().toISOString()
+    };
+    saveState();
+    renderReviewAction();
+    renderAiSettingsStatus();
+  } catch (error) {
+    state.aiSettings = {
+      ...settings,
+      connectionStatus: "failed",
+      testedAt: new Date().toISOString()
+    };
+    saveState();
+    renderReviewAction();
+    renderAiSettingsStatus(error.message || `${providerLabels[settings.provider]} 连接失败，请检查 API Key。`);
+  }
 }
 
 function markAiSettingsUntested() {
@@ -356,7 +396,7 @@ function renderAiSettingsStatus(message) {
     return;
   }
   if (settings.connectionStatus === "connected") {
-    elements.aiSettingsStatus.textContent = `${providerLabels[settings.provider]} 设置已通过本地检查。真实连接测试需要接后端。`;
+    elements.aiSettingsStatus.textContent = `${providerLabels[settings.provider]} 连接成功，可以开始批改。`;
     return;
   }
   if (settings.connectionStatus === "failed") {
@@ -364,10 +404,10 @@ function renderAiSettingsStatus(message) {
     return;
   }
   if (settings.connectionStatus === "testing") {
-    elements.aiSettingsStatus.textContent = "正在检查设置...";
+    elements.aiSettingsStatus.textContent = "正在测试连接...";
     return;
   }
-  elements.aiSettingsStatus.textContent = "已保存。请测试连接；原型先做本地检查，真实 API 测试要接后端。";
+  elements.aiSettingsStatus.textContent = "已保存。请测试连接，成功后才能批改。";
 }
 
 function renderReviewAction() {
@@ -629,10 +669,71 @@ function buildReviewIntegrationMessage(settings) {
   return `已选择自己的 ${providerLabels[settings.provider]} API。下一步需要接后端代理，才能安全地把照片送去批改。`;
 }
 
-function waitForConnectionTest() {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, 500);
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
   });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+  if (!response.ok) {
+    if (response.status === 404 && url.startsWith("/api/")) {
+      throw new Error("后端接口没有启动。请用 npm start 打开本地服务，或部署到能运行 Node.js 的服务器。");
+    }
+    throw new Error(data.error || "请求失败了。");
+  }
+  return data;
+}
+
+async function buildReviewUploadPayload(upload) {
+  const stored = await getUploadFile(upload.id);
+  if (!stored?.file) {
+    throw new Error(`没有找到 ${upload.name} 的原始文件，请重新上传。`);
+  }
+  return {
+    id: upload.id,
+    name: upload.name,
+    type: upload.type || stored.file.type || guessFileType(upload.name),
+    subject: upload.subject || elements.subjectInput.value,
+    dataUrl: await blobToDataUrl(stored.file)
+  };
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => resolve(reader.result));
+    reader.addEventListener("error", () => reject(reader.error));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function normalizeReviewQuestion(question, createdAt) {
+  const result = ["wrong", "blank", "correct"].includes(question.result) ? question.result : "wrong";
+  return {
+    id: crypto.randomUUID(),
+    question: question.question || "AI 识别到的一道题",
+    childAnswer: question.childAnswer || defaultChildAnswer(result),
+    correctAnswer: question.correctAnswer || "请家长确认",
+    result,
+    subject: question.subject || elements.subjectInput.value,
+    topic: question.topic || "还没分",
+    explanation: question.explanation || "AI 还没有给出解题方法，请点修改补充。",
+    similarQuestion: question.similarQuestion || "",
+    retryResult: result === "correct" ? "not-needed" : "",
+    understood: result === "correct",
+    archived: false,
+    sourceUploadId: question.sourceUploadId || "",
+    createdAt
+  };
 }
 
 function removeLegacyMockProblems() {
