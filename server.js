@@ -193,6 +193,7 @@ function buildTranscriptionPrompt(subject) {
 2. 孩子写错、涂改、划掉、老师打叉或红笔标记的地方要标出来。
 3. 看不清的题不要编造，写“看不清”。
 4. 如果一张图里有多道题，要逐题编号。
+5. 红叉、半勾、圈画、订正痕迹、空白答案区域，都要如实记录，不要当作做对。
 
 输出普通文本即可，格式参考：
 题1：
@@ -232,7 +233,8 @@ ${transcript}
 2. 做对的题也可以放进 JSON，用于统计，但解释要简短。
 3. 如果照片看不清，把 result 设为 wrong，question 写“这张照片看不清”，explanation 提醒重新拍清楚。
 4. 不要编造转写里没有的具体题目。
-5. 对空白题，childAnswer 写“空着没写”，explanation 重点说明第一步怎么开始。`;
+5. 对空白题，childAnswer 写“空着没写”，explanation 重点说明第一步怎么开始。
+6. 如果转写里出现红叉、半勾、订正痕迹，但无法确定孩子原答案是否正确，result 设为 wrong，并在 explanation 里写“需要家长确认”。`;
 }
 
 async function callGemini(apiKey, parts, maxOutputTokens, jsonMode = true) {

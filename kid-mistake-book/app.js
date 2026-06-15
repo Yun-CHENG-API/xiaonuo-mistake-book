@@ -188,10 +188,7 @@ async function startReview() {
   }
 
   const unreviewedUploads = state.uploads.filter((upload) => !upload.reviewedAt);
-  if (unreviewedUploads.length === 0) {
-    setReviewStatus("这些作业已经批改过了。", "info");
-    return;
-  }
+  const reviewTargetUploads = unreviewedUploads.length > 0 ? unreviewedUploads : state.uploads;
 
   const settings = normalizeAiSettings(state.aiSettings);
   if (!settings.apiKey) {
@@ -207,7 +204,7 @@ async function startReview() {
   setReviewStatus("小诺正在把照片交给 AI 批改...", "working");
 
   try {
-    const reviewUploads = await Promise.all(unreviewedUploads.map(buildReviewUploadPayload));
+    const reviewUploads = await Promise.all(reviewTargetUploads.map(buildReviewUploadPayload));
     const data = await postJson("/api/review", {
       provider: settings.provider,
       apiKey: settings.apiKey,
@@ -216,15 +213,21 @@ async function startReview() {
     });
     const reviewedAt = new Date().toISOString();
     const newProblems = (data.questions || []).map((question) => normalizeReviewQuestion(question, reviewedAt));
+    const reviewedUploadIds = new Set(reviewTargetUploads.map((upload) => upload.id));
+    state.problems = state.problems.filter((problem) => !reviewedUploadIds.has(problem.sourceUploadId));
     state.problems.push(...newProblems);
     state.uploads = state.uploads.map((upload) =>
-      unreviewedUploads.some((item) => item.id === upload.id) ? { ...upload, reviewedAt } : upload
+      reviewedUploadIds.has(upload.id) ? { ...upload, reviewedAt } : upload
     );
-    setActiveFilter("all");
-    saveState();
-    render();
     const wrongCount = newProblems.filter((problem) => problem.result === "wrong").length;
     const blankCount = newProblems.filter((problem) => problem.result === "blank").length;
+    setActiveFilter(wrongCount + blankCount > 0 ? "all" : "reviewed");
+    saveState();
+    render();
+    if (wrongCount + blankCount === 0) {
+      setReviewStatus("这次没有识别到错题或空白。我已切到“全部识别”，请看 AI 是否漏判。", "info");
+      return;
+    }
     setReviewStatus(`批改好了：错题 ${wrongCount} 道，空白 ${blankCount} 道。`, "success");
   } catch (error) {
     console.error(error);
@@ -415,7 +418,7 @@ function renderReviewAction() {
   const hasUnreviewedUploads = state.uploads.some((upload) => !upload.reviewedAt);
   const settings = normalizeAiSettings(state.aiSettings);
   const canReview = Boolean(settings.apiKey) && settings.connectionStatus === "connected";
-  elements.startReview.disabled = !hasUploads || !hasUnreviewedUploads || !canReview;
+  elements.startReview.disabled = !hasUploads || !canReview;
   if (!settings.apiKey) {
     elements.startReview.textContent = "先连接 AI";
     return;
@@ -424,7 +427,7 @@ function renderReviewAction() {
     elements.startReview.textContent = "先测试连接";
     return;
   }
-  elements.startReview.textContent = hasUnreviewedUploads ? "开始批改" : "已完成批改";
+  elements.startReview.textContent = hasUnreviewedUploads ? "开始批改" : "重新批改";
 }
 
 async function renderUploads() {
@@ -479,6 +482,7 @@ function renderProblems() {
     if (activeFilter === "blankArchive") return normalized.archived && normalized.result === "blank";
     if (activeFilter === "wrong") return normalized.result === "wrong";
     if (activeFilter === "blank") return normalized.result === "blank";
+    if (activeFilter === "reviewed") return true;
     if (activeFilter === "correct") return normalized.result === "correct";
     return normalized.result !== "correct";
   });
