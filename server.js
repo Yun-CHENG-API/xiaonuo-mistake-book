@@ -98,7 +98,7 @@ async function testProvider({ provider, apiKey }) {
   assertApiKey(apiKey);
 
   if (provider === "gemini") {
-    await callGemini(apiKey, [{ text: "请只回复 OK。" }], 16);
+    await callGemini(apiKey, [{ text: "请只回复 OK。" }], 16, false);
     return;
   }
 
@@ -130,41 +130,86 @@ async function reviewHomework({ provider, apiKey, subject, uploads }) {
   }
 
   if (provider === "deepseek") {
-    throw httpError(400, "DeepSeek 这条路需要先接 OCR，把照片转成文字后才能批改。请先选 Gemini、GPT 或 Claude。");
+    throw httpError(400, "DeepSeek 不能直接看作业照片。它需要先接 OCR：照片先转成文字，再把文字交给 DeepSeek 批改。当前请先选 Gemini、GPT 或 Claude。");
   }
 
-  const prompt = buildReviewPrompt(subject || imageUploads[0].subject || "数学");
+  const currentSubject = subject || imageUploads[0].subject || "数学";
+  const transcript = await transcribeHomework(provider, apiKey, currentSubject, imageUploads);
+  const prompt = buildReviewPrompt(currentSubject, transcript);
   let text = "";
 
   if (provider === "gemini") {
-    const parts = [{ text: prompt }, ...imageUploads.map(toGeminiInlineData)];
+    const parts = [{ text: prompt }];
     text = await callGemini(apiKey, parts, 4096);
   }
 
   if (provider === "gpt") {
-    const content = [
-      { type: "input_text", text: prompt },
-      ...imageUploads.map((upload) => ({
-        type: "input_image",
-        image_url: upload.dataUrl
-      }))
-    ];
+    const content = [{ type: "input_text", text: prompt }];
     text = await callOpenAI(apiKey, content, 4096);
   }
 
   if (provider === "claude") {
-    const content = [
-      { type: "text", text: prompt },
-      ...imageUploads.map(toClaudeImage)
-    ];
+    const content = [{ type: "text", text: prompt }];
     text = await callClaude(apiKey, content, 4096);
   }
 
-  return parseReviewQuestions(text, subject || "数学", imageUploads[0]?.id || "");
+  return parseReviewQuestions(text, currentSubject, imageUploads[0]?.id || "");
 }
 
-function buildReviewPrompt(subject) {
-  return `你是“小诺的错题本”的批改助手。请看家长上传的${subject}作业照片，识别题目、孩子答案、空白题和错题。
+async function transcribeHomework(provider, apiKey, subject, imageUploads) {
+  const prompt = buildTranscriptionPrompt(subject);
+
+  if (provider === "gemini") {
+    return callGemini(apiKey, [{ text: prompt }, ...imageUploads.map(toGeminiInlineData)], 4096, false);
+  }
+
+  if (provider === "gpt") {
+    return callOpenAI(
+      apiKey,
+      [
+        { type: "input_text", text: prompt },
+        ...imageUploads.map((upload) => ({
+          type: "input_image",
+          image_url: upload.dataUrl
+        }))
+      ],
+      4096,
+      false
+    );
+  }
+
+  if (provider === "claude") {
+    return callClaude(apiKey, [{ type: "text", text: prompt }, ...imageUploads.map(toClaudeImage)], 4096);
+  }
+
+  throw httpError(400, "这个 AI 暂时不能直接看照片。");
+}
+
+function buildTranscriptionPrompt(subject) {
+  return `你是“小诺的错题本”的作业照片转写助手。请先只做识别，不要批改。
+
+请按照片从上到下、从左到右列出你能看清的题目，特别注意：
+1. 空白没写的题必须标出来。
+2. 孩子写错、涂改、划掉、老师打叉或红笔标记的地方要标出来。
+3. 看不清的题不要编造，写“看不清”。
+4. 如果一张图里有多道题，要逐题编号。
+
+输出普通文本即可，格式参考：
+题1：
+题目：
+孩子答案：
+老师/红笔痕迹：
+是否空白：
+是否看不清：
+
+学科：${subject}`;
+}
+
+function buildReviewPrompt(subject, transcript) {
+  return `你是“小诺的错题本”的批改助手。下面是从${subject}作业照片中转写出的内容。请基于转写内容批改，不要编造转写里没有的题目。
+
+【作业转写】
+${transcript}
 
 只返回 JSON，不要解释，不要 Markdown。格式如下：
 {
@@ -186,10 +231,13 @@ function buildReviewPrompt(subject) {
 1. 错题和空白题一定要放出来，空白题不要忽略。
 2. 做对的题也可以放进 JSON，用于统计，但解释要简短。
 3. 如果照片看不清，把 result 设为 wrong，question 写“这张照片看不清”，explanation 提醒重新拍清楚。
-4. 不要编造看不见的具体题目。`;
+4. 不要编造转写里没有的具体题目。
+5. 对空白题，childAnswer 写“空着没写”，explanation 重点说明第一步怎么开始。`;
 }
 
-async function callGemini(apiKey, parts, maxOutputTokens) {
+async function callGemini(apiKey, parts, maxOutputTokens, jsonMode = true) {
+  const generationConfig = { maxOutputTokens };
+  if (jsonMode) generationConfig.responseMimeType = "application/json";
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${providerModels.gemini}:generateContent`,
     {
@@ -200,10 +248,7 @@ async function callGemini(apiKey, parts, maxOutputTokens) {
       },
       body: JSON.stringify({
         contents: [{ parts }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          maxOutputTokens
-        }
+        generationConfig
       })
     }
   );
@@ -211,21 +256,24 @@ async function callGemini(apiKey, parts, maxOutputTokens) {
   return data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
 }
 
-async function callOpenAI(apiKey, content, maxOutputTokens) {
+async function callOpenAI(apiKey, content, maxOutputTokens, jsonMode = true) {
+  const body = {
+    model: providerModels.gpt,
+    input: [{ role: "user", content }],
+    max_output_tokens: maxOutputTokens
+  };
+  if (jsonMode) {
+    body.text = {
+      format: { type: "json_object" }
+    };
+  }
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`
     },
-    body: JSON.stringify({
-      model: providerModels.gpt,
-      input: [{ role: "user", content }],
-      max_output_tokens: maxOutputTokens,
-      text: {
-        format: { type: "json_object" }
-      }
-    })
+    body: JSON.stringify(body)
   });
   const data = await readProviderResponse(response);
   return data.output_text || data.output?.flatMap((item) => item.content || []).map((item) => item.text || "").join("") || "";
